@@ -31,6 +31,7 @@ defined('MOODLE_INTERNAL') || die();
 require_once($CFG->dirroot . '/course/moodleform_mod.php');
 require_once(__DIR__ . '/locallib.php');
 require_once($CFG->libdir . '/filelib.php');
+require_once($CFG->libdir . '/plagiarismlib.php');
 
 /**
  * Module settings form for Workshop instances
@@ -43,9 +44,9 @@ class mod_workshop_mod_form extends moodleform_mod {
     /**
      * Constructor
      */
-    public function __construct($current, $section, $cm, $course) {
+    public function __construct($current, $section, $cm, $course, $ajax = false, $formparams = null, $jsonformdata = null) {
         $this->course = $course;
-        parent::__construct($current, $section, $cm, $course);
+        parent::__construct($current, $section, $cm, $course, $ajax, $formparams, $jsonformdata);
     }
 
     /**

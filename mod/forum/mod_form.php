@@ -26,7 +26,7 @@ if (!defined('MOODLE_INTERNAL')) {
 }
 
 require_once ($CFG->dirroot.'/course/moodleform_mod.php');
-
+require_once($CFG->libdir . '/plagiarismlib.php');
 class mod_forum_mod_form extends moodleform_mod {
 
     function definition() {

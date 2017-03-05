@@ -66,7 +66,18 @@ abstract class moodleform_mod extends moodleform {
     /** @var object The course format of the current course. */
     protected $courseformat;
 
-    public function __construct($current, $section, $cm, $course) {
+    /**
+     * moodleform_mod constructor
+     *
+     * @param object $current current data
+     * @param int $section section of current module
+     * @param object $cm module
+     * @param int $course course id of module
+     * @param bool $ajax true if this form constructed by webservice
+     * @param array $formparams form params
+     * @param array $jsonformdata json form data from ajax request
+     */
+    public function __construct($current, $section, $cm, $course, $ajax = false, $formparams = null, $jsonformdata = null) {
         global $CFG;
 
         $this->current   = $current;
@@ -84,7 +95,7 @@ abstract class moodleform_mod extends moodleform {
         require_once($CFG->dirroot . '/course/format/lib.php');
         $this->courseformat = course_get_format($course);
 
-        // Guess module name
+        // Guess module name.
         $matches = array();
         if (!preg_match('/^mod_([^_]+)_mod_form$/', get_class($this), $matches)) {
             debugging('Use $modname parameter or rename form to mod_xx_mod_form, where xx is name of your module');
@@ -92,7 +103,11 @@ abstract class moodleform_mod extends moodleform {
         }
         $this->_modname = $matches[1];
         $this->init_features();
-        parent::__construct('modedit.php');
+        if ($ajax) {
+            parent::__construct(null, $formparams, 'post', '', null, true, $jsonformdata);
+        } else {
+            parent::__construct('modedit.php');
+        }
     }
 
     /**

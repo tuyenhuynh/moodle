@@ -3364,6 +3364,405 @@ class core_course_external extends external_api {
     }
 
     /**
+     * Parameters for function submit_module_editing_form()
+     *
+     * @since Moodle 3.3
+     * @return external_function_parameters
+     */
+    public static function submit_module_editing_form_parameters() {
+        return new external_function_parameters(
+            array(
+                'moduleid' => new external_value(PARAM_INT,
+                'module type: assign, book, chat, choice, data, feedback,folder, forum, ..', VALUE_REQUIRED),
+                'sectionreturn' => new external_value(PARAM_INT, 'sectionreturn', VALUE_REQUIRED),
+                'jsonformdata' => new external_value(PARAM_RAW,
+                    'The data from the mod_form, encoded as a json array', VALUE_REQUIRED)
+            ));
+    }
+
+    /**
+     * Process form submission and html code to replace with
+     *
+     * Returns html code to replace with
+     *
+     * Throws exception if operation is not permitted/possible
+     *
+     * @since Moodle 3.3
+     * @param int $moduleid if of module
+     * @param int $sectionreturn section return
+     * @param string $jsonformdata serialized json object
+     * @return string
+     */
+    public static function submit_module_editing_form($moduleid, $sectionreturn, $jsonformdata) {
+        global $PAGE, $DB, $CFG, $USER, $OUTPUT;
+        require_once($CFG->libdir.'/gradelib.php');
+        require_once($CFG->dirroot . '/course/modlib.php');
+        $params = self::validate_parameters(self::submit_module_editing_form_parameters(),
+                                            array(
+                                                'moduleid' => $moduleid,
+                                                'sectionreturn' => $sectionreturn,
+                                                'jsonformdata' => $jsonformdata
+                                            ));
+
+        // Check the course module exists.
+        $cm = get_coursemodule_from_id('', $moduleid, 0, false, MUST_EXIST);
+        $course = $DB->get_record('course', array('id' => $cm->course), '*', MUST_EXIST);
+        require_login($course, false, $cm);
+
+        list($cm, $context, $module, $data, $cw) = get_moduleinfo_data($cm, $course);
+        $data->return = 0;
+        $data->sr = 0;
+        $data->update = $moduleid;
+
+        $serialiseddata = json_decode($params['jsonformdata']);
+
+        $jsondata = array();
+        parse_str($serialiseddata, $jsondata);
+
+        $customdata = (object) $jsondata;
+
+        $formparams = array($cm, $customdata, null);
+
+        $modmoodleform = "$CFG->dirroot/mod/$module->name/mod_form.php";
+        if (file_exists($modmoodleform)) {
+            require_once($modmoodleform);
+        } else {
+            print_error('noformdesc');
+        }
+
+        $mformclassname = 'mod_'.$module->name.'_mod_form';
+        $mform = new $mformclassname($data, $cw->section, $cm, $course, true, $formparams, $jsondata);
+
+        $html = '';
+        $error = 0;
+        $javascript = '';
+        if ($fromform = $mform->get_data()) {
+            if (isset($fromform->gradepass)) {
+                $fromform->gradepass = unformat_float($fromform->gradepass);
+            }
+            list($cm, $fromform) = update_moduleinfo($cm, $fromform, $course, $mform);
+            $courserenderer = $PAGE->get_renderer('core', 'course');
+            $completioninfo = new completion_info($course);
+            $cm = get_fast_modinfo($course)->get_cm($moduleid);
+            $html = $courserenderer->course_section_cm_list_item($course, $completioninfo, $cm, $sectionreturn);
+
+        } else {
+            $error = 1;
+            ob_start();
+            echo $OUTPUT->header();
+            $header = ob_get_clean();
+            $html = $mform->render();
+
+            $footer = $OUTPUT->footer();
+            $jsbegin = strpos($footer, '<script');
+            $jsfinish = strrpos($footer, '</script>');
+
+            $jsfooter = substr($footer, $jsbegin, $jsfinish - $jsbegin + 9);
+        }
+
+        return array('error' => $error, 'html' => $html, 'javascript' => $jsfooter);
+    }
+
+    /**
+     * Return structure for submit_module_editing_form()
+     *
+     * @since Moodle 3.3
+     * @return external_description
+     */
+    public static function submit_module_editing_form_returns() {
+        return new external_single_structure(
+            array(
+                'error' => new external_value(PARAM_BOOL, 'true if there is an error in serverside form validation'),
+                'html' => new external_value(PARAM_RAW, 'html code of created module to display on course page or previous form with error'),
+                'javascript' => new external_value(PARAM_RAW, 'javascript to return in case serverside validation failed'),
+            ));
+    }
+
+    /**
+     * Parameters for function submit_module_adding_form()
+     *
+     * @since Moodle 3.3
+     * @return external_function_parameters
+     */
+    public static function submit_module_adding_form_parameters() {
+        return new external_function_parameters(
+            array(
+                'section' => new external_value(PARAM_INT, 'section of module to add to', VALUE_REQUIRED),
+                'course' => new external_value(PARAM_INT, 'id of course, where module will be added to', VALUE_REQUIRED),
+                'add' => new external_value(PARAM_ALPHA, 'module type', VALUE_REQUIRED),
+                'sectionreturn' => new external_value(PARAM_INT, 'sectionreturn', VALUE_REQUIRED),
+                'jsonformdata' => new external_value(PARAM_RAW,
+                    'The data from the mod_form, encoded as a json array', VALUE_REQUIRED)
+            ));
+    }
+
+    /**
+     * Process form submission and return html code to display on course page
+     *
+     * Returns html code to display on course page
+     *
+     * Throws exception if operation is not permitted/possible
+     *
+     * @since Moodle 3.3
+     * @param int $section section of module that is being added
+     * @param int $course course id of module
+     * @param string $add module type
+     * @param int $sectionreturn section return
+     * @param string jsonformdata serialized json object
+     * @return string
+     */
+    public static function submit_module_adding_form($section, $course, $add, $sectionreturn, $jsonformdata) {
+        global $PAGE, $DB, $CFG, $USER, $OUTPUT;
+        require_once($CFG->libdir.'/gradelib.php');
+        require_once($CFG->dirroot . '/course/modlib.php');
+        $params = self::validate_parameters(self::submit_module_adding_form_parameters(),
+                                            array(
+                                                'section' => $section,
+                                                'course' => $course,
+                                                'add' => $add,
+                                                'jsonformdata' => $jsonformdata,
+                                                'sectionreturn' => $sectionreturn
+                                            ));
+        $course = $DB->get_record('course', array('id' => $course), '*', MUST_EXIST);
+        list($module, $context, $cw, $cm, $data) = prepare_new_moduleinfo_data($course, $add, $section);
+        $data->return = 0;
+        $data->sr = $sectionreturn;
+        $data->add = $add;
+
+        require_login($course);
+
+        $serialiseddata = json_decode($params['jsonformdata']);
+
+        $jsondata = array();
+        parse_str($serialiseddata, $jsondata);
+
+        $customdata = (object) $jsondata;
+
+        $formparams = array($cm, $customdata, null);
+
+        $modmoodleform = "$CFG->dirroot/mod/$module->name/mod_form.php";
+        if (file_exists($modmoodleform)) {
+            require_once($modmoodleform);
+        } else {
+            print_error('noformdesc');
+        }
+
+        $mformclassname = 'mod_'.$module->name.'_mod_form';
+        $mform = new $mformclassname($data, $cw->section, $cm, $course, true, $formparams, $jsondata);
+
+        $html = '';
+        $error = 0;
+        $javascript = '';
+        if ($fromform = $mform->get_data()) {
+            if (isset($fromform->gradepass)) {
+                $fromform->gradepass = unformat_float($fromform->gradepass);
+            }
+            $fromform = add_moduleinfo($fromform, $course, $mform);
+            $moduleid = $fromform->coursemodule;
+            $courserenderer = $PAGE->get_renderer('core', 'course');
+            $completioninfo = new completion_info($course);
+            $cm = get_fast_modinfo($course)->get_cm($moduleid);
+            $html = $courserenderer->course_section_cm_list_item($course, $completioninfo, $cm, $sectionreturn);
+
+        } else {
+            $error = 1;
+            ob_start();
+            echo $OUTPUT->header();
+            $header = ob_get_clean();
+            $html = $mform->render();
+
+            $footer = $OUTPUT->footer();
+            $jsbegin = strpos($footer, '<script');
+            $jsfinish = strrpos($footer, '</script>');
+
+            $jsfooter = substr($footer, $jsbegin, $jsfinish - $jsbegin + 9);
+
+        }
+        return array('error' => $error, 'html' => $html, 'javascript' => $jsfooter);
+    }
+
+    /**
+     * Return structure for submit_module_adding_form()
+     *
+     * @since Moodle 3.3
+     * @return external_description
+     */
+    public static function submit_module_adding_form_returns() {
+        return new external_single_structure(
+            array(
+                'error' => new external_value(PARAM_BOOL, 'error in form validation'),
+                'html' => new external_value(PARAM_RAW, 'html code of created module to display on course page or previous form with error'),
+                'javascript' => new external_value(PARAM_RAW, 'javascript'),
+            ));
+    }
+
+    /**
+     * Parameters for get_course_module_adding_dialog()
+     *
+     * @since Moodle 3.3
+     * @return external_function_parameters
+     */
+    public static function get_course_module_adding_dialog_parameters() {
+        return new external_function_parameters(
+            array(
+                'courseid' => new external_value(PARAM_INT, 'course id', VALUE_REQUIRED),
+                'section' => new external_value(PARAM_INT, 'section of module', VALUE_REQUIRED),
+                'add' => new external_value(PARAM_ALPHA, 'module type', VALUE_REQUIRED),
+                'sectionreturn' => new external_value(PARAM_INT, 'section to return to', VALUE_DEFAULT, null),
+            ));
+    }
+
+    /**
+     * Returns html and js code for displaying adding activity form
+     *
+     * @since Moodle 3.3
+     * @param int $courseid course id of module that is being added
+     * @param int $section section id of module
+     * @param string $add module type
+     * @param null|int $sectionreturn section return
+     * @return array
+     */
+    public static function get_course_module_adding_dialog($courseid, $section, $add, $sectionreturn = null) {
+        global $DB, $CFG, $OUTPUT;
+        require_once($CFG->libdir.'/gradelib.php');
+        require_once($CFG->dirroot . '/course/modlib.php');
+
+        $course = $DB->get_record('course', array('id' => $courseid), '*', MUST_EXIST);
+        require_login($course);
+
+        list($module, $context, $cw, $cm, $data) = prepare_new_moduleinfo_data($course, $add, $section);
+        $data->return = 0;
+        $data->sr = $sectionreturn;
+        $data->add = $add;
+        $sectionname = get_section_name($course, $cw);
+
+        $modmoodleform = "$CFG->dirroot/mod/$module->name/mod_form.php";
+        if (file_exists($modmoodleform)) {
+            require_once($modmoodleform);
+        } else {
+            print_error('noformdesc');
+        }
+
+        $mformclassname = 'mod_'.$module->name.'_mod_form';
+        $mform = new $mformclassname($data, $cw->section, $cm, $course);
+        $mform->set_data($data);
+
+        $html = '';
+        $jsfooter = '';
+
+        $context = context_course::instance($course->id);
+        ob_start();
+        echo $OUTPUT->header();
+        $header = ob_get_clean();
+
+        $html = $mform->render();
+        $footer = $OUTPUT->footer();
+        $jsbegin = strpos($footer, '<script');
+        $jsfinish = strrpos($footer, '</script>');
+
+        $jsfooter = substr($footer, $jsbegin, $jsfinish - $jsbegin + 9);
+
+        return array('html' => $html, 'javascript' => $jsfooter);
+    }
+
+    /**
+     * Return structure for get_course_module_adding_dialog
+     *
+     * @since Moodle 3.3
+     * @return external_description
+     */
+    public static function get_course_module_adding_dialog_returns() {
+        return new external_single_structure(
+            array(
+                'html' => new external_value(PARAM_RAW, 'HTML fragment.'),
+                'javascript' => new external_value(PARAM_RAW, 'JavaScript fragment')
+            )
+        );
+    }
+
+    /**
+     * Parameters for get_course_module_editing_dialog()
+     *
+     * @since Moodle 3.3
+     * @return external_function_parameters
+     */
+    public static function get_course_module_editing_dialog_parameters() {
+        return new external_function_parameters(
+            array(
+                'update' => new external_value(PARAM_INT, 'course module id', VALUE_REQUIRED),
+                'sectionreturn' => new external_value(PARAM_INT, 'section to return to', VALUE_DEFAULT, null),
+            ));
+    }
+
+    /**
+     * Returns html and js code for displaying adding activity form
+     *
+     * @since Moodle 3.3
+     * @param int $update id of module that is being edited
+     * @param null|int $sectionreturn section return
+     * @return array
+     */
+    public static function get_course_module_editing_dialog($update, $sectionreturn = null) {
+        global $DB, $CFG, $OUTPUT;
+        require_once($CFG->libdir.'/gradelib.php');
+        require_once($CFG->dirroot . '/course/modlib.php');
+
+        // Check the course module exists.
+        $cm = get_coursemodule_from_id('', $update, 0, false, MUST_EXIST);
+
+        // Check the course exists.
+        $course = $DB->get_record('course', array('id' => $cm->course), '*', MUST_EXIST);
+
+        require_login($course, false, $cm);
+
+        list($cm, $context, $module, $data, $cw) = get_moduleinfo_data($cm, $course);
+        $data->return = 0; // Default value of param return.
+        $data->sr = $sectionreturn;
+        $data->update = $update;
+
+        $modmoodleform = "$CFG->dirroot/mod/$module->name/mod_form.php";
+        if (file_exists($modmoodleform)) {
+            require_once($modmoodleform);
+        } else {
+            print_error('noformdesc');
+        }
+
+        $mformclassname = 'mod_'.$module->name.'_mod_form';
+        $mform = new $mformclassname($data, $cw->section, $cm, $course);
+        $mform->set_data($data);
+
+        $html = '';
+        $jsfooter = '';
+
+        ob_start();
+        echo $OUTPUT->header();
+        $header = ob_get_clean();
+        $html = $mform->render();
+        $footer = $OUTPUT->footer();
+        $jsbegin = strpos($footer, '<script');
+        $jsfinish = strrpos($footer, '</script>');
+
+        $jsfooter = substr($footer, $jsbegin, $jsfinish - $jsbegin + 9);
+
+        return array('html' => $html, 'javascript' => $jsfooter);
+    }
+
+    /**
+     * Return structure for get_course_module_editing_dialog
+     *
+     * @since Moodle 3.3
+     * @return external_description
+     */
+    public static function get_course_module_editing_dialog_returns() {
+        return new external_single_structure(
+            array(
+                'html' => new external_value(PARAM_RAW, 'HTML fragment.'),
+                'javascript' => new external_value(PARAM_RAW, 'JavaScript fragment')
+            )
+        );
+    }
+
+    /**
      * Parameters for function get_module()
      *
      * @since Moodle 3.3
