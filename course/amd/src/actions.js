@@ -22,8 +22,9 @@
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  * @since      3.3
  */
-define(['jquery', 'core/ajax', 'core/templates', 'core/notification', 'core/str', 'core/url', 'core/yui'],
-    function($, ajax, templates, notification, str, url, Y) {
+define(['jquery', 'core/ajax', 'core/templates', 'core/notification',
+    'core/str', 'core/url', 'core/yui', 'core/fragment', 'core/modal_factory'],
+    function($, ajax, templates, notification, str, url, Y, Fragment, ModalFactory) {
         var CSS = {
             EDITINPROGRESS: 'editinprogress',
             SECTIONDRAGGABLE: 'sectiondraggable',
@@ -36,7 +37,17 @@ define(['jquery', 'core/ajax', 'core/templates', 'core/notification', 'core/str'
             MENU: '.moodle-actionmenu[data-enhance=moodle-core-actionmenu]',
             TOGGLE: '.toggle-display,.dropdown-toggle',
             SECTIONLI: 'li.section',
-            SECTIONACTIONMENU: '.section_action_menu'
+            SECTIONACTIONMENU: '.section_action_menu',
+            MODALCONTAINER: 'div.modal',
+            MODAL: 'div.modal-content',
+            FORM: '#mform1',
+            SUBMITBUTTON: '#id_submitbutton',
+            SUBMITBUTTON2: '#id_submitbutton2',
+            CANCELBUTTON: '#id_cancel',
+            CANCELBUTTON2: 'div.modal-header button[data-action=hide]',
+            URL_JUMP: '#chooserform input[type=hidden][name=jump]',
+            BUTTON_ADD: '#chooserform input[type=submit][name=submitbutton]',
+            SECTION_UL: 'ul.section',
         };
 
         Y.use('moodle-course-coursebase', function() {
@@ -214,6 +225,381 @@ define(['jquery', 'core/ajax', 'core/templates', 'core/notification', 'core/str'
                 }
             });
             return foundElement;
+        };
+
+        /**
+         * Gets request params from url
+         *
+         * @param {String} url Url to get params
+         * @returns {Object}
+         */
+        var getRequestParams = function(url) {
+            var params = {};
+            var tokens = url.substr(url.indexOf('?') + 1).split('&');
+            for (var i in tokens) {
+                var token = tokens[i].split('=');
+                params[decodeURIComponent(token[0])] = decodeURIComponent(token[1]);
+            }
+            return params;
+        };
+
+        /**
+         * Loads editting form of resource/activity
+         *
+         * @param {JQuery} moduleElement activity element we need to load editing form
+         * @param {Number} cmid
+         * @param {JQuery} target the element (menu item) that was clicked
+         */
+        var loadModuleEditingForm = function(moduleElement, cmid, target) {
+            var url = target.attr('href');
+            var params = getRequestParams(url);
+            var promises = ajax.call([{
+                methodname: 'core_course_get_course_module_editing_dialog',
+                args: {update: cmid, sectionreturn: params.sr}
+            }], true);
+            var lightbox = addPageLightbox();
+            $.when.apply($, promises)
+                .done(function(data) {
+                    removePageLightbox(lightbox);
+                    showModuleEditingForm(moduleElement, data.html, data.javascript, cmid, params.module_type, params.sr);
+                });
+        };
+
+        /**
+         * Show resource/activity editting form
+         *
+         * @param {JQuery} moduleElement activity element we need to load editing form
+         * @param {String} html
+         * @param {String} javascript
+         * @param {Number} cmid
+         * @param {String} moduleType
+         * @param {Number} sectionreturn
+         * @param {JQuery} target the element (menu item) that was clicked
+         */
+        var showModuleEditingForm = function(moduleElement, html, javascript, cmid, moduleType, sectionreturn) {
+            var jsNodes = $(javascript);
+            // The first node always contains redefinition of require.
+            // It should be removed, otherwise, function require will be overwritten by variable require.
+            jsNodes.splice(0, 1);
+            var js = collectScriptFromScriptNodes(jsNodes);
+            removePreviousModalAndScript();
+            ModalFactory.create({
+                title: "Update " + moduleType,
+                body: html,
+            })
+            .done(function(modal) {
+                modal.show();
+                // Set style for modal
+                $(SELECTOR.MODAL).css({
+                    width: "800px",
+                    height: "500px",
+                    left: "50%",
+                    "margin-left":  "-400px",
+                    overflow: "auto",
+                    border: "1px solid black"
+                });
+
+                // Handle form submission
+                $(SELECTOR.SUBMITBUTTON2).click(function(e) {
+                    e.preventDefault();
+                    onSubmitModuleEditingForm(moduleElement, cmid, moduleType, sectionreturn, modal);
+                });
+                // Handle cancel submission
+                $(SELECTOR.CANCELBUTTON + ',' + SELECTOR.CANCELBUTTON2).on('click', function(e) {
+                    e.preventDefault();
+                    hideModal(modal);
+                });
+                // Handle esc
+                $('body').on('keydown', function(e) {
+                    if (e.keyCode === 27) {
+                        hideModal(modal);
+                    }
+                });
+
+                // Append response script to document
+                var validatorName = "validate_mod_" + moduleType + "_mod_form";
+                var formListenerDecl = "document.getElementById('mform1').addEventListener";
+                js = js.replace(formListenerDecl, 'window.clientSideValidator=' + validatorName + ';\n' + formListenerDecl);
+                var scriptElement = document.createElement('script');
+                scriptElement.textContent = js;
+                document.head.appendChild(scriptElement);
+            });
+        };
+
+        /**
+         * Submits form via ajax call
+         *
+         * @param {JQuery} moduleElement activity element we need to edit
+         * @param {Number} cmid
+         * @param {Object} moduleType
+         * @param {Number} sectionreturn
+         * @param {Object} modal
+         */
+        var onSubmitModuleEditingForm = function(moduleElement, cmid, moduleType, sectionreturn, modal) {
+            var isValidated = false;
+            try {
+                var myValidator = window.clientSideValidator;
+                if (typeof window.tinyMCE !== 'undefined') {
+                    window.tinyMCE.triggerSave();
+                }
+                isValidated = myValidator();
+            } catch(e) {
+                isValidated = true;
+            }
+            if (isValidated) {
+                // Disable other submit buttons
+                $(SELECTOR.CANCELBUTTON)
+                    .prop('disabled', 'disabled');
+                var submitButton = $(SELECTOR.SUBMITBUTTON);
+                if (submitButton !== null) {
+                    submitButton.prop('disabled', 'disabled');
+                }
+
+                var promises = ajax.call([{
+                    methodname: 'core_course_submit_module_editing_form',
+                    args: {
+                        moduleid: cmid,
+                        sectionreturn: 0,
+                        jsonformdata: JSON.stringify($(SELECTOR.FORM).serialize())
+                    }
+                 }], true);
+
+                $.when.apply($, promises).done(function(data) {
+                    if (data.error) {
+                        showModuleEditingForm(moduleElement, data.html, data.javascript, cmid, moduleType, sectionreturn);
+                    } else {
+                        moduleElement.replaceWith(data.html);
+                        $('<div>' + data.html + '</div>').find(SELECTOR.ACTIVITYLI).each(function() {
+                            initActionMenu($(this).attr('id'), false);
+                        });
+                        hideModal(modal);
+                    }
+                });
+            }
+        };
+
+        /**
+         * Collect contents of script nodes (for creating single node and append to page)
+         *
+         * @param {JQuery} jsNodes
+         * @return {string}
+         */
+        var collectScriptFromScriptNodes = function(jsNodes) {
+            var allScript = '';
+            jsNodes.each(function(index, scriptNode) {
+                scriptNode = $(scriptNode);
+                var tagName = scriptNode.prop('tagName');
+                if (tagName && (tagName.toLowerCase() == 'script')) {
+                    if (scriptNode.attr('src')) {
+                        // We only reload the script if it was not loaded already.
+                        var exists = false;
+                        $('script').each(function(index, s) {
+                            if ($(s).attr('src') == scriptNode.attr('src')) {
+                                exists = true;
+                            }
+                            return !exists;
+                        });
+                        if (!exists) {
+                            allScript += ' { ';
+                            allScript += ' node = document.createElement("script"); ';
+                            allScript += ' node.type = "text/javascript"; ';
+                            allScript += ' node.src = decodeURI("' + encodeURI(scriptNode.attr('src')) + '"); ';
+                            allScript += ' document.getElementsByTagName("head")[0].appendChild(node); ';
+                            allScript += ' } ';
+                        }
+                    } else {
+                        allScript += ' ' + scriptNode.text();
+                    }
+                }
+            });
+            return allScript;
+        };
+
+        /**
+         * Load form to create new resource/activity
+         */
+        var loadModuleAddingForm = function() {
+            var jumpUrl = $(SELECTOR.URL_JUMP).val();
+            var params = getRequestParams(jumpUrl);
+
+            var sectionElement = $('#section-' + params.section + ' ' + SELECTOR.SECTION_UL);
+
+            var promises = ajax.call([{
+                methodname: 'core_course_get_course_module_adding_dialog',
+                args: {courseid: params.id, section: params.section, add: params.add, sectionreturn: params.sr}
+            }], true);
+
+            $('.addcancel').trigger('click');
+            var lightbox = addPageLightbox();
+            $.when.apply($, promises)
+                .done(function(data) {
+                    removePageLightbox(lightbox);
+                    showModuleAddingForm(sectionElement, params.section, data.html, data.javascript, params.add, params.sr);
+                });
+        };
+
+        /**
+         * Show resource/activity adding form
+         *
+         * @param {JQuery} sectionElement section, in which we need to create new resource/activity
+         * @param {Number} sectionid
+         * @param {String} html
+         * @param {String} javascript
+         * @param {String} moduleType
+         * @param {Number} sectionreturn
+         */
+        var showModuleAddingForm = function(sectionElement, sectionid, html, javascript, moduleType, sectionreturn) {
+            var jsNodes = $(javascript);
+            // The first node always contains redefinition of require.
+            // It should be removed, otherwise, function require will be overwritten by variable require.
+            jsNodes.splice(0, 1);
+            var js = collectScriptFromScriptNodes(jsNodes);
+            removePreviousModalAndScript();
+            ModalFactory.create({
+                    title: "Add " + moduleType,
+                    body: html,
+                })
+                .done(function(modal) {
+                    modal.show();
+                    // Set style for modal
+                    $(SELECTOR.MODAL).css({
+                        width: "800px",
+                        height: "500px",
+                        left: "50%",
+                        "margin-left":  "-400px",
+                        overflow: "auto",
+                        border: "1px solid black"
+                    });
+                    // Append response script to document
+                    var validatorName = "validate_mod_" + moduleType + "_mod_form";
+                    var formListenerDecl = "document.getElementById('mform1').addEventListener";
+                    js = js.replace(formListenerDecl, 'window.clientSideValidator=' + validatorName + ';\n' + formListenerDecl);
+                    var scriptElement = document.createElement('script');
+                    scriptElement.textContent = js;
+                    document.head.appendChild(scriptElement);
+                    // Handle form submission
+                    $(SELECTOR.SUBMITBUTTON2).click(function(e) {
+                        e.preventDefault();
+                        onSubmitModuleAddingForm(sectionElement, sectionid, moduleType, modal, sectionreturn);
+                    });
+                    // Handle cancel submission
+                    $(SELECTOR.CANCELBUTTON + ',' + SELECTOR.CANCELBUTTON2).on('click', function(e) {
+                        e.preventDefault();
+                        hideModal(modal);
+                    });
+                    // Handle esc
+                    $('body').on('keydown', function(e) {
+                        if (e.keyCode === 27) {
+                            hideModal(modal);
+                    }
+                });
+            });
+        };
+
+        /**
+         * Submit form adding resource via ajax call
+         *
+         * @param {JQuery} sectionElement section, in which we need to create new resource/activity
+         * @param {Number} sectionid
+         * @param {String} moduleType
+         * @param {Jquery} modal
+         * @param {Number} sectionreturn
+         */
+        var onSubmitModuleAddingForm = function(sectionElement, sectionid, moduleType, modal, sectionreturn) {
+            var isValidated = false;
+            if (window.clientSideValidator) {
+                try {
+                    var myValidator = window.clientSideValidator;
+                    if (typeof window.tinyMCE !== 'undefined') {
+                        window.tinyMCE.triggerSave();
+                    }
+                    isValidated = myValidator();
+                } catch (e) {
+                    isValidated = false;
+                }
+            } else {
+                isValidated = true;
+            }
+
+            if (isValidated) {
+                // Disable other submit buttons
+                $(SELECTOR.CANCELBUTTON)
+                    .prop('disabled', true);
+                $(SELECTOR.SUBMITBUTTON)
+                    .prop('disabled', true);
+                var requestParams = getRequestParams(document.URL.split('#')[0]);
+                var promises = ajax.call([{
+                    methodname: 'core_course_submit_module_adding_form',
+                    args: {
+                        section: sectionid,
+                        course: requestParams.id,
+                        add: moduleType,
+                        sectionreturn: sectionreturn,
+                        jsonformdata: JSON.stringify($(SELECTOR.FORM).serialize())
+                    }
+                 }], true);
+                $.when.apply($, promises).done(function(data) {
+                    if (data.error) {
+                        showModuleAddingForm(sectionElement, sectionid, data.html, data.javascript, moduleType, sectionreturn);
+                    } else {
+                        sectionElement.append(data.html);
+                        $('<div>' + data.html + '</div>').find(SELECTOR.ACTIVITYLI).each(function() {
+                            initActionMenu($(this).attr('id'), false);
+                        });
+                        // Hide modal
+                        hideModal(modal);
+                    }
+                });
+            }
+        };
+
+        /**
+         * Remove modal
+         *
+         * @param {Modal} modal
+         */
+        var hideModal = function(modal) {
+            modal.hide();
+            window.onbeforeunload = null;
+        };
+
+        /**
+         * Add lightbox to page
+         *
+         */
+        var addPageLightbox = function() {
+            var lightbox = M.util.add_lightbox(Y, Y.Node($('body')[0]));
+            lightbox.setStyle('position', 'fixed');
+            lightbox.setStyle('z-index', '1055');
+            lightbox.show();
+            return lightbox;
+        };
+
+        /**
+        * Remove page lightbox
+        *
+        * @param {Node} lightbox lighbox YUI element returned by addPageLightbox
+        */
+        var removePageLightbox = function(lightbox) {
+            // Recover property position of body, which was changed when adding lightbox
+            $('body').css('position', 'static');
+            lightbox.remove();
+        };
+
+        /**
+         * Removes editting form and appended script of editting form
+         *
+         * @param {Object} modal activity element we need to load editing form
+         */
+        var removePreviousModalAndScript = function() {
+            $(SELECTOR.MODALCONTAINER).each(function() {
+                this.remove();
+            });
+            $('footer').siblings('script').each(function() {
+                this.remove();
+            });
+            // Prevent browser from warning about form dirty state.
+            window.onbeforeunload = null;
         };
 
         /**
@@ -520,6 +906,7 @@ define(['jquery', 'core/ajax', 'core/templates', 'core/notification', 'core/str'
                         action = actionItem.attr('data-action'),
                         moduleId = getModuleId(moduleElement);
                     switch (action) {
+                        case 'update':
                         case 'moveleft':
                         case 'moveright':
                         case 'delete':
@@ -544,9 +931,16 @@ define(['jquery', 'core/ajax', 'core/templates', 'core/notification', 'core/str'
                         confirmDeleteModule(moduleElement, function() {
                             editModule(moduleElement, moduleId, actionItem);
                         });
+                    } else if (action === 'update') {
+                        loadModuleEditingForm(moduleElement, moduleId, actionItem);
                     } else {
                         editModule(moduleElement, moduleId, actionItem);
                     }
+                });
+
+                $('body').on('click keypress', SELECTOR.BUTTON_ADD, function(e) {
+                    e.preventDefault();
+                    loadModuleAddingForm();
                 });
 
                 // Add a handler for section show/hide actions.

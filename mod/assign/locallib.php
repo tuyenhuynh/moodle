@@ -1247,7 +1247,9 @@ class assign {
             $update->completionsubmit = !empty($formdata->completionsubmit);
         }
         $update->teamsubmission = $formdata->teamsubmission;
-        $update->requireallteammemberssubmit = $formdata->requireallteammemberssubmit;
+        if (isset($formdata->requireallteammemberssubmit)) {
+            $update->requireallteammemberssubmit = $formdata->requireallteammemberssubmit;
+        }
         if (isset($formdata->teamsubmissiongroupingid)) {
             $update->teamsubmissiongroupingid = $formdata->teamsubmissiongroupingid;
         }
@@ -1263,7 +1265,9 @@ class assign {
             $update->preventsubmissionnotingroup = $formdata->preventsubmissionnotingroup;
         }
         $update->markingworkflow = $formdata->markingworkflow;
-        $update->markingallocation = $formdata->markingallocation;
+        if (isset($formdata->markingallocation)) {
+            $update->markingallocation = $formdata->markingallocation;
+        }
         if (empty($update->markingworkflow)) { // If marking workflow is disabled, make sure allocation is disabled.
             $update->markingallocation = 0;
         }

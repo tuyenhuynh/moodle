@@ -1816,8 +1816,12 @@ function course_get_cm_edit_actions(cm_info $mod, $indent = -1, $sr = null) {
 
     // Update.
     if ($hasmanageactivities) {
+        global $DB;
+        $context = $DB->get_record('context', array('instanceid' => $mod->id, 'contextlevel' => 70));
+        $moduletype = $DB->get_record('modules', array('id' => $mod->module));
+
         $actions['update'] = new action_menu_link_secondary(
-            new moodle_url($baseurl, array('update' => $mod->id)),
+            new moodle_url($baseurl, array('update' => $mod->id, 'contextid' => $context->id, 'module_type' => $moduletype->name)),
             new pix_icon('t/edit', $str->editsettings, 'moodle', array('class' => 'iconsmall', 'title' => '')),
             $str->editsettings,
             array('class' => 'editing_update', 'data-action' => 'update')
